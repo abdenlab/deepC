@@ -1,4 +1,4 @@
-'''DESCRIPTION:
+"""DESCRIPTION:
 Run predictions of class changes --> shape changes over mutations
 # Important: all changes will be treated independendly so e.g. deletion in
 mutation one will not affect the coordinates of mutation 2 and so on
@@ -11,7 +11,7 @@ replace columns specifies what to relace the specified window with --> can be di
 special cases:
     "." indicates a pure deletion
     "reference" indicates to just use the reference for this variant
-'''
+"""
 
 from __future__ import absolute_import, division, print_function
 import os
@@ -24,51 +24,102 @@ from itertools import islice, cycle
 import pysam
 
 import tensorflow.compat.v1 as tf
+
 tf.disable_v2_behavior()
+
 
 # helper custom rounding to arbitrary base
 def customround(x, base=5):
-    return int(base * round(float(x)/base))
+    return int(base * round(float(x) / base))
+
+
 def customfloor(x, base=5):
-    f = int(base * round(float(x)/base))
+    f = int(base * round(float(x) / base))
     if f > x:
         f = f - base
     return f
+
+
 def customceil(x, base=5):
-    f = int(base * round(float(x)/base))
+    f = int(base * round(float(x) / base))
     if f < x:
         f = f + base
     return f
+
 
 # Basic model parameters as external flags -------------------------------------
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 # flags.DEFINE_bool('h', False, 'Help flag.')
-flags.DEFINE_string('dlmodel', 'deepCregr', 'Specifcy the DL model file to use e.g. <endpoolDeepHaemElement>.py')
+flags.DEFINE_string(
+    "dlmodel",
+    "deepCregr",
+    "Specifcy the DL model file to use e.g. <endpoolDeepHaemElement>.py",
+)
 # RUN SETTINGS
-flags.DEFINE_integer('batch_size', 1, 'Batch size.')
-flags.DEFINE_string('out_dir', '.', 'Directory to store the predicted results')
-flags.DEFINE_string('name_tag', 'pred', 'Nametag to add to filenames')
+flags.DEFINE_integer("batch_size", 1, "Batch size.")
+flags.DEFINE_string("out_dir", ".", "Directory to store the predicted results")
+flags.DEFINE_string("name_tag", "pred", "Nametag to add to filenames")
 # WHAT TO DO
-flags.DEFINE_string('slize', 'all', 'Comma separated list of start and end position of columns to slice out (0) indexed. Will use all if unspecified.')
+flags.DEFINE_string(
+    "slize",
+    "all",
+    "Comma separated list of start and end position of columns to slice out (0) indexed. Will use all if unspecified.",
+)
 # EXTERNAL files
-flags.DEFINE_string('input', '', 'Must be a variant file specifying the mutations to apply to the reference (custom made format for now)!')
-flags.DEFINE_string('model', './model', 'Checkpoint of model file to be tested. (Full path to model without suffix!)')
-flags.DEFINE_string('genome', 'hg19.fasta', 'Full path to fasta reference genome of interest to extract the sequence from.')
-flags.DEFINE_string('padd_ends', 'none', 'Specify if to padd with half times bp_context N\'s to predict over chromosome ends [left, right, none, both].')
+flags.DEFINE_string(
+    "input",
+    "",
+    "Must be a variant file specifying the mutations to apply to the reference (custom made format for now)!",
+)
+flags.DEFINE_string(
+    "model",
+    "./model",
+    "Checkpoint of model file to be tested. (Full path to model without suffix!)",
+)
+flags.DEFINE_string(
+    "genome",
+    "hg19.fasta",
+    "Full path to fasta reference genome of interest to extract the sequence from.",
+)
+flags.DEFINE_string(
+    "padd_ends",
+    "none",
+    "Specify if to padd with half times bp_context N's to predict over chromosome ends [left, right, none, both].",
+)
 # Data Options
-flags.DEFINE_integer('bp_context', 1010000, 'Basepairs per feature.')
-flags.DEFINE_integer('add_window', 0, 'Basepairs to add around variant of interest for prediction and hence visualization later.')
-flags.DEFINE_integer('num_classes', 101, 'Number of classes.')
-flags.DEFINE_integer('bin_size', 10000, 'Bin size to apply when running over the new sequence.')
-flags.DEFINE_integer('variant_counter', 0, 'Variant Counter variable to start from (will set +1 for first variable).')
-flags.DEFINE_string('bin_steps', 'full', 'Specify if to predict in  half bin size steps of full bin size steps [hal Mainly for restarting again from a longer list. [default: 0]')
-flags.DEFINE_boolean('use_softmasked', False, 'Include soft masked sequences (lower case). If False will set them to Ns. Default = False')
+flags.DEFINE_integer("bp_context", 1010000, "Basepairs per feature.")
+flags.DEFINE_integer(
+    "add_window",
+    0,
+    "Basepairs to add around variant of interest for prediction and hence visualization later.",
+)
+flags.DEFINE_integer("num_classes", 101, "Number of classes.")
+flags.DEFINE_integer(
+    "bin_size", 10000, "Bin size to apply when running over the new sequence."
+)
+flags.DEFINE_integer(
+    "variant_counter",
+    0,
+    "Variant Counter variable to start from (will set +1 for first variable).",
+)
+flags.DEFINE_string(
+    "bin_steps",
+    "full",
+    "Specify if to predict in  half bin size steps of full bin size steps [hal Mainly for restarting again from a longer list. [default: 0]",
+)
+flags.DEFINE_boolean(
+    "use_softmasked",
+    False,
+    "Include soft masked sequences (lower case). If False will set them to Ns. Default = False",
+)
 
 # machine options
-flags.DEFINE_string('run_on', 'gpu', 'Select where to run on (cpu or gpu)')
-flags.DEFINE_integer('gpu', 0, 'Select a single available GPU and mask the rest. Default 0.')
+flags.DEFINE_string("run_on", "gpu", "Select where to run on (cpu or gpu)")
+flags.DEFINE_integer(
+    "gpu", 0, "Select a single available GPU and mask the rest. Default 0."
+)
 
 # # Print HELP if desired --------------------------------------------------------
 # if FLAGS.h:
@@ -80,27 +131,28 @@ flags.DEFINE_integer('gpu', 0, 'Select a single available GPU and mask the rest.
 # import dl model architechture selected
 dlmodel = __import__(FLAGS.dlmodel)
 
-half_bp_context = int(FLAGS.bp_context/2)
+half_bp_context = int(FLAGS.bp_context / 2)
 
-half_bin_size = int(FLAGS.bin_size/2)
+half_bin_size = int(FLAGS.bin_size / 2)
 
-if FLAGS.bin_steps not in ['half', 'full']:
-    print('Set bin_steps to \'half\' or \'full\'')
+if FLAGS.bin_steps not in ["half", "full"]:
+    print("Set bin_steps to 'half' or 'full'")
     sys.exit()
 
 # prepare for column slizes if specified
-if FLAGS.slize != 'all':
-    slize_scheme = [x.strip() for x in FLAGS.slize.split(',')]
+if FLAGS.slize != "all":
+    slize_scheme = [x.strip() for x in FLAGS.slize.split(",")]
     slize_scheme = list(map(int, slize_scheme))
 
 # GLOBAL OPTIONS ---------------------------------------------------------------
+
 
 # HELPER FUNCTIONS -------------------------------------------------------------
 # Helper get hotcoded sequence
 def get_hot_coded_seq(sequence, use_soft=False):
     """Convert a 4 base letter sequence to 4-row x-cols hot coded sequence"""
     # initialise empty
-    hotsequence = np.zeros((len(sequence),4), dtype = 'uint8')
+    hotsequence = np.zeros((len(sequence), 4), dtype="uint8")
 
     # transform to uppercase if using softmasked sequences
     if use_soft:
@@ -108,25 +160,27 @@ def get_hot_coded_seq(sequence, use_soft=False):
 
     # set hot code 1 according to gathered sequence
     for i in range(len(sequence)):
-        if sequence[i] == 'A':
-            hotsequence[i,0] = 1
-        elif sequence[i] == 'C':
-            hotsequence[i,1] = 1
-        elif sequence[i] == 'G':
-            hotsequence[i,2] = 1
-        elif sequence[i] == 'T':
-            hotsequence[i,3] = 1
+        if sequence[i] == "A":
+            hotsequence[i, 0] = 1
+        elif sequence[i] == "C":
+            hotsequence[i, 1] = 1
+        elif sequence[i] == "G":
+            hotsequence[i, 2] = 1
+        elif sequence[i] == "T":
+            hotsequence[i, 3] = 1
 
     # return the numpy array
     return hotsequence
 
-def predict(sess,
+
+def predict(
+    sess,
     regression_score,
     seqs_placeholder,
     seqs,
     keep_prob_inner_placeholder,
-    keep_prob_outer_placeholder
-    ):
+    keep_prob_outer_placeholder,
+):
     """Make predictions --> get sigmoid output of net per sequence and class"""
     cases = seqs.shape[0]
     line_counter = 0
@@ -138,33 +192,35 @@ def predict(sess,
         line_counter += 1
         test_batch_start = step * FLAGS.batch_size
         test_batch_end = step * FLAGS.batch_size + FLAGS.batch_size
-        test_batch_range=range(test_batch_start, test_batch_end)
+        test_batch_range = range(test_batch_start, test_batch_end)
         feed_dict = {
-              seqs_placeholder: seqs[test_batch_range],
-              keep_prob_inner_placeholder: 1.0,
-              keep_prob_outer_placeholder: 1.0
-              }
+            seqs_placeholder: seqs[test_batch_range],
+            keep_prob_inner_placeholder: 1.0,
+            keep_prob_outer_placeholder: 1.0,
+        }
         # print(seqs[test_batch_range])
         # print(seqs[test_batch_range].shape)
         tmp_regression_score = sess.run(regression_score, feed_dict=feed_dict)
         tmp_regression_score = np.asarray(tmp_regression_score)
         tmp_regression_score = np.squeeze(tmp_regression_score)
         # add to the empty prediction scores array
-        predictions[step*FLAGS.batch_size:step*FLAGS.batch_size+FLAGS.batch_size,] = tmp_regression_score
+        predictions[
+            step * FLAGS.batch_size : step * FLAGS.batch_size + FLAGS.batch_size,
+        ] = tmp_regression_score
         if line_counter % 100 == 0:
-            print('%s lines done ...' % line_counter)
+            print("%s lines done ..." % line_counter)
 
     # handle remaining cases
     if remaining > 0:
-        test_batch_range=range(cases-remaining, cases)
+        test_batch_range = range(cases - remaining, cases)
         # workaround for single value prediction
         if remaining == 1:
-            test_batch_range=range(cases-remaining-1, cases)
+            test_batch_range = range(cases - remaining - 1, cases)
         feed_dict = {
-              seqs_placeholder: seqs[test_batch_range],
-              keep_prob_inner_placeholder: 1.0,
-              keep_prob_outer_placeholder: 1.0
-              }
+            seqs_placeholder: seqs[test_batch_range],
+            keep_prob_inner_placeholder: 1.0,
+            keep_prob_outer_placeholder: 1.0,
+        }
         tmp_regression_score = sess.run(regression_score, feed_dict=feed_dict)
         tmp_regression_score = np.asarray(tmp_regression_score)
         tmp_regression_score = np.squeeze(tmp_regression_score)
@@ -173,7 +229,8 @@ def predict(sess,
 
     return predictions
 
-''' START '''
+
+""" START """
 
 # check if existent --> else create out_dir and Init Output File ---------------
 if not os.path.exists(FLAGS.out_dir):
@@ -181,18 +238,18 @@ if not os.path.exists(FLAGS.out_dir):
 
 # Load Model -------------------------------------------------------------------
 # Create a session
-if FLAGS.run_on == 'cpu':
-    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+if FLAGS.run_on == "cpu":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-config = tf.ConfigProto();
-if FLAGS.run_on == 'gpu':
+config = tf.ConfigProto()
+if FLAGS.run_on == "gpu":
     config.gpu_options.visible_device_list = str(FLAGS.gpu)
 config.allow_soft_placement = True
 
 # Launch Session and retrieve stored OPs and Variables
-with tf.Session(config = config) as sess:
+with tf.Session(config=config) as sess:
     # load meta graph and restore weights
-    saver = tf.train.import_meta_graph(FLAGS.model + '.meta')
+    saver = tf.train.import_meta_graph(FLAGS.model + ".meta")
     saver.restore(sess, FLAGS.model)
     # get placeholders and ops ------------------------------------------------
     graph = tf.get_default_graph()
@@ -210,10 +267,10 @@ with tf.Session(config = config) as sess:
 
             reference_flag = 0  # some flags for process structure
             deletion_flag = 0
-            if re.match('^#', line):  # skip comment and header lines
+            if re.match("^#", line):  # skip comment and header lines
                 continue
             variant_counter += 1
-            print('processing entry %s' % variant_counter)
+            print("processing entry %s" % variant_counter)
             chrom, start, end, replacer = line.split()
             start = int(start)
             end = int(end)
@@ -223,14 +280,14 @@ with tf.Session(config = config) as sess:
             # count bases specified
             reference_length = end - start + 1
             # decide on mutation mode
-            if re.match('reference', replacer):  # REPORT REFERENCE
+            if re.match("reference", replacer):  # REPORT REFERENCE
                 reference_flag = 1
                 replacer_length = reference_length
-            elif re.match('\.', replacer):  # DELETION
+            elif re.match("\.", replacer):  # DELETION
                 deletion_flag = 1
                 replacer_length = 0
             else:
-                replacer_length = len(replacer) # count bases in replacer
+                replacer_length = len(replacer)  # count bases in replacer
 
             # get difference in bases ----------------------------------------------
             length_difference = reference_length - replacer_length
@@ -238,7 +295,9 @@ with tf.Session(config = config) as sess:
             # set new coordinates --------------------------------------------------
             new_start = start
             new_end = end - length_difference
-            if deletion_flag == 1:  # adjust for full deletions as the first base pair goes as well
+            if (
+                deletion_flag == 1
+            ):  # adjust for full deletions as the first base pair goes as well
                 new_start = new_start - 1
                 new_end = new_end - 1
 
@@ -248,9 +307,25 @@ with tf.Session(config = config) as sess:
 
             # round new coordinates to full bins and set sequence window to extract -----
             # add 990,000 bp to either side of the last bin start / endpool
-            patch_start = customfloor(start, FLAGS.bin_size) - (FLAGS.add_window) - half_bp_context - half_bin_size
-            patch_end = customceil(end, FLAGS.bin_size) + (FLAGS.add_window) + half_bp_context + half_bin_size
-            patch_new_end = customceil(end, FLAGS.bin_size) + length_difference + (FLAGS.add_window) + half_bp_context + half_bin_size
+            patch_start = (
+                customfloor(start, FLAGS.bin_size)
+                - (FLAGS.add_window)
+                - half_bp_context
+                - half_bin_size
+            )
+            patch_end = (
+                customceil(end, FLAGS.bin_size)
+                + (FLAGS.add_window)
+                + half_bp_context
+                + half_bin_size
+            )
+            patch_new_end = (
+                customceil(end, FLAGS.bin_size)
+                + length_difference
+                + (FLAGS.add_window)
+                + half_bp_context
+                + half_bin_size
+            )
 
             # check start and end of range
             # set start_diff if sequence to query is over the chromosome ends --> ready to padd
@@ -258,38 +333,48 @@ with tf.Session(config = config) as sess:
             seq_start = patch_start
             if patch_start < 0:
                 start_diff = abs(patch_start)
-                seq_start = 0 # cover over the border cases for sequence retrival
+                seq_start = 0  # cover over the border cases for sequence retrival
 
             # extract reference sequence -------------------------------------------
             with pysam.Fastafile(FLAGS.genome) as fa:
-                    seq = fa.fetch(reference = chrom, start = seq_start, end = patch_new_end)
+                seq = fa.fetch(reference=chrom, start=seq_start, end=patch_new_end)
 
             # pad if specifiedand at end of chromosome
             if start_diff > 0:
-                if FLAGS.padd_ends in ['left', 'both']:
+                if FLAGS.padd_ends in ["left", "both"]:
                     # padd with N's
-                    print('padding with N\'s left wards')
-                    seq = 'N' * start_diff + seq
+                    print("padding with N's left wards")
+                    seq = "N" * start_diff + seq
                 else:
-                    print('%s:%s-%s is smaller then bp_context and no padding specified ... skipping' % (chrom, start, end))
+                    print(
+                        "%s:%s-%s is smaller then bp_context and no padding specified ... skipping"
+                        % (chrom, start, end)
+                    )
                     continue
             else:
-            # END padding ... need chrom sizes
+                # END padding ... need chrom sizes
                 end_diff = patch_new_end - (len(seq) + patch_start)
                 if end_diff > 0:
-                    if FLAGS.padd_ends in ['right', 'both']:
-                        print('padding with N\'s right wards')
-                        seq = seq + 'N' * end_diff
+                    if FLAGS.padd_ends in ["right", "both"]:
+                        print("padding with N's right wards")
+                        seq = seq + "N" * end_diff
                     else:
-                        print('%s:%s-%s is smaller then bp_context and no padding specified ... skipping' % (chrom, start, end))
+                        print(
+                            "%s:%s-%s is smaller then bp_context and no padding specified ... skipping"
+                            % (chrom, start, end)
+                        )
                         continue
 
             # mutate reference sequence --------------------------------------------
             if deletion_flag == 1:
-                seq = seq[0:(start-patch_start)] + seq[(end-patch_start+1):]
+                seq = seq[0 : (start - patch_start)] + seq[(end - patch_start + 1) :]
             elif reference_flag == 0:
                 # partial deletion or insertion or matching replacemant
-                seq = seq[:(start-patch_start)] + replacer + seq[(end-patch_start+1):]
+                seq = (
+                    seq[: (start - patch_start)]
+                    + replacer
+                    + seq[(end - patch_start + 1) :]
+                )
                 print("replacing with %s" % replacer)
 
             # print(seq)
@@ -303,11 +388,16 @@ with tf.Session(config = config) as sess:
             run_seqs = []
 
             # select if to use half_bin_size  or not
-            if FLAGS.bin_steps == 'full':
-                while i < (seq_length - FLAGS.bp_context + FLAGS.bin_size) / FLAGS.bin_size:
+            if FLAGS.bin_steps == "full":
+                while (
+                    i
+                    < (seq_length - FLAGS.bp_context + FLAGS.bin_size) / FLAGS.bin_size
+                ):
                     js = patch_start + i * FLAGS.bin_size
                     je = patch_start + i * FLAGS.bin_size + FLAGS.bp_context
-                    jseq = seq[(i*FLAGS.bin_size):((i)*FLAGS.bin_size + FLAGS.bp_context)]
+                    jseq = seq[
+                        (i * FLAGS.bin_size) : ((i) * FLAGS.bin_size + FLAGS.bp_context)
+                    ]
                     run_starts.append(js)
                     run_ends.append(je)
                     run_seqs.append(jseq)
@@ -316,10 +406,16 @@ with tf.Session(config = config) as sess:
             else:
                 # half bin size step mode
                 print("Using %s half in size" % half_bin_size)
-                while i < (seq_length - FLAGS.bp_context + FLAGS.bin_size - half_bin_size) / half_bin_size:
+                while (
+                    i
+                    < (seq_length - FLAGS.bp_context + FLAGS.bin_size - half_bin_size)
+                    / half_bin_size
+                ):
                     js = patch_start + i * half_bin_size
                     je = patch_start + i * half_bin_size + FLAGS.bp_context
-                    jseq = seq[(i*half_bin_size):((i)*half_bin_size + FLAGS.bp_context)]
+                    jseq = seq[
+                        (i * half_bin_size) : ((i) * half_bin_size + FLAGS.bp_context)
+                    ]
                     run_starts.append(js)
                     run_ends.append(je)
                     run_seqs.append(jseq)
@@ -329,7 +425,9 @@ with tf.Session(config = config) as sess:
             # make hotcoded sequences
             hotseqs = []
             for seq in run_seqs:
-                seq = get_hot_coded_seq(seq, use_soft=FLAGS.use_softmasked)  # hot encode
+                seq = get_hot_coded_seq(
+                    seq, use_soft=FLAGS.use_softmasked
+                )  # hot encode
                 hotseqs.append(seq)
             hotseqs = np.asarray(hotseqs)
 
@@ -340,24 +438,39 @@ with tf.Session(config = config) as sess:
                 seqs_placeholder,
                 hotseqs,
                 keep_prob_inner_placeholder,
-                keep_prob_outer_placeholder)
+                keep_prob_outer_placeholder,
+            )
 
             # round predictions
             predictions = np.round(predictions, 4)
 
             # Report -----------------------------------------------------------------------
-            outfile_name = FLAGS.out_dir + "/" + 'class_predictions_%s_%s_%s_%s_%s.txt' % (FLAGS.name_tag, variant_counter, chrom, start, end)
+            outfile_name = (
+                FLAGS.out_dir
+                + "/"
+                + "class_predictions_%s_%s_%s_%s_%s.txt"
+                % (FLAGS.name_tag, variant_counter, chrom, start, end)
+            )
             with open(outfile_name, "w") as fw:
-                fw.write('# Variant Queried: %s' % line.rstrip())
-                fw.write('\n')
-                fw.write('# Mapping to relative reference coordinates: %s %s %s' % (chrom, (patch_start + half_bp_context - half_bin_size), (patch_end - half_bp_context - half_bin_size)))
-                fw.write('\n')
-                fw.write('# Bp to adjust after Variant: %s' % length_difference)
-                fw.write('\n')
+                fw.write("# Variant Queried: %s" % line.rstrip())
+                fw.write("\n")
+                fw.write(
+                    "# Mapping to relative reference coordinates: %s %s %s"
+                    % (
+                        chrom,
+                        (patch_start + half_bp_context - half_bin_size),
+                        (patch_end - half_bp_context - half_bin_size),
+                    )
+                )
+                fw.write("\n")
+                fw.write("# Bp to adjust after Variant: %s" % length_difference)
+                fw.write("\n")
                 for i in range(len(run_starts)):
-                    pred_out = '\t'.join(map(str, predictions[i,:]))
-                    fw.write("%s\t%s\t%s\t%s" % (chrom, run_starts[i], run_ends[i], pred_out))
-                    fw.write('\n')
+                    pred_out = "\t".join(map(str, predictions[i, :]))
+                    fw.write(
+                        "%s\t%s\t%s\t%s" % (chrom, run_starts[i], run_ends[i], pred_out)
+                    )
+                    fw.write("\n")
 
 
 # close up
